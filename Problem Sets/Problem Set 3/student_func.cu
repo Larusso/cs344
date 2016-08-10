@@ -27,6 +27,20 @@
 
 #include "utils.h"
 
+/**
+* histogram
+*/
+
+__global__ void histogram(unsigned int *d_bins,
+                          const float *d_in,
+                          const float lumMin,
+                          const float lumRange,
+                          int BIN_COUNT)
+{
+    int i = threadIdx.x + blockDim.x * blockIdx.x;
+    int bin = (d_in[i] - lumMin) / lumRange * BIN_COUNT;
+    atomicAdd(&(d_bins[bin]), 1);
+}
 
 /**
 * reduce max
@@ -120,8 +134,8 @@ void reduce_min(float &max_logLum, const float * d_in, const size_t size)
 {
   float *d_intermediate;
   float *d_out;
-  cudaMalloc((void **) &d_intermediate, size * sizeof(float)); // overallocated
-  cudaMalloc((void **) &d_out, sizeof(float)); // overallocated
+  checkCudaErrors(cudaMalloc((void **) &d_intermediate, size * sizeof(float))); // overallocated
+  checkCudaErrors(cudaMalloc((void **) &d_out, sizeof(float))); // overallocated
 
   const int maxThreadsPerBlock = 1024;
   int threads = maxThreadsPerBlock;
@@ -134,7 +148,7 @@ void reduce_min(float &max_logLum, const float * d_in, const size_t size)
 
   reduce_min_kernel<<<blocks, threads, threads * sizeof(float)>>>(d_out, d_intermediate);
 
-  cudaMemcpy(&max_logLum, d_out, sizeof(float), cudaMemcpyDeviceToHost);
+  checkCudaErrors(cudaMemcpy(&max_logLum, d_out, sizeof(float), cudaMemcpyDeviceToHost));
   cudaFree(d_out);
   printf("minimum %f \n", max_logLum);
 }
@@ -153,8 +167,9 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     1) find the minimum and maximum value in the input logLuminance channel
        store in min_logLum and max_logLum
   */
-  reduce_max(max_logLum, d_logLuminance, numRows * numCols);
-  reduce_min(min_logLum, d_logLuminance, numRows * numCols);
+  size_t size = numRows * numCols;
+  reduce_max(max_logLum, d_logLuminance, size);
+  reduce_min(min_logLum, d_logLuminance, size);
   /*
     2) subtract them to find the range
   */
@@ -163,6 +178,15 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
     3) generate a histogram of all the values in the logLuminance channel using
        the formula: bin = (lum[i] - lumMin) / lumRange * numBins
   */
+  unsigned int *d_histo;
+  const int maxThreadsPerBlock = 1024;
+  checkCudaErrors(cudaMalloc((void **) &d_histo, numBins * sizeof(int)));
+  checkCudaErrors(cudaMemset(d_histo, 0, numBins * sizeof(int)));
+  histogram<<<size / maxThreadsPerBlock, maxThreadsPerBlock>>>(d_histo,
+                                                               d_logLuminance,
+                                                               min_logLum,
+                                                               logLumRange,
+                                                               numBins);
 
   /*
     4) Perform an exclusive scan (prefix sum) on the histogram to get
@@ -170,5 +194,6 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
        incoming d_cdf pointer which already has been allocated for you)
   */
 
+  
 
 }
