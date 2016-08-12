@@ -27,11 +27,17 @@
 
 #include "utils.h"
 
+#define NUM_BANKS 16
+#define LOG_NUM_BANKS 4
+#define CONFLICT_FREE_OFFSET(n) \
+    ((n) >> NUM_BANKS + (n) >> (2 * LOG_NUM_BANKS))
+
 /**
 * histogram
 */
 
-__global__ void histogram(unsigned int *d_bins,
+__global__
+void histogram(unsigned int *d_bins,
                           const float *d_in,
                           const float lumMin,
                           const float lumRange,
@@ -94,7 +100,6 @@ void reduce_max(float &max_logLum, const float * d_in, const size_t size)
 
   cudaMemcpy(&max_logLum, d_out, sizeof(float), cudaMemcpyDeviceToHost);
   cudaFree(d_out);
-  printf("maximum %f \n", max_logLum);
 }
 
 /**
@@ -153,6 +158,59 @@ void reduce_min(float &max_logLum, const float * d_in, const size_t size)
   printf("minimum %f \n", max_logLum);
 }
 
+__global__
+void prescan(unsigned int *g_odata, unsigned int *g_idata, int n)
+{
+  extern __shared__  unsigned int temp[];
+  // allocated on invocation
+  int thid = threadIdx.x;
+  int offset = 1;
+  int ai = thid;
+  int bi = thid + (n/2);
+  int bankOffsetA = CONFLICT_FREE_OFFSET(ai);
+  int bankOffsetB = CONFLICT_FREE_OFFSET(ai);
+  temp[ai + bankOffsetA] = g_idata[ai];
+  temp[bi + bankOffsetB] = g_idata[bi];
+
+  for(int d = n>>1; d > 0; d >>= 1)
+  // build sum in place up the tree
+  {
+    __syncthreads();
+    if(thid < d)
+    {
+      int ai = offset*(2*thid+1)-1;
+      int bi = offset*(2*thid+2)-1;
+      ai += CONFLICT_FREE_OFFSET(ai);
+      bi += CONFLICT_FREE_OFFSET(bi);
+
+      temp[bi] += temp[ai];
+    }
+    offset *= 2;
+  }
+
+  if (thid == 0) { temp[n - 1+ CONFLICT_FREE_OFFSET(n - 1)] = 0; }
+  //if (thid==0) { temp[n – 1 + CONFLICT_FREE_OFFSET(n - 1)] = 0; }
+  // clear the last element
+  for (int d = 1; d < n; d *= 2)
+  // traverse down tree & build scan
+  {
+    offset >>= 1;
+    __syncthreads();
+    if (thid < d)
+    {
+      int ai = offset*(2*thid+1)-1;
+      int bi = offset*(2*thid+2)-1;
+      float t   = temp[ai];
+      temp[ai]  = temp[bi];
+      temp[bi] += t;
+    }
+  }
+
+  __syncthreads();
+  g_odata[ai] = temp[ai + bankOffsetA];
+  g_odata[bi] = temp[bi + bankOffsetB];
+}
+
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                   unsigned int* const d_cdf,
                                   float &min_logLum,
@@ -179,6 +237,7 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
        the formula: bin = (lum[i] - lumMin) / lumRange * numBins
   */
   unsigned int *d_histo;
+  unsigned int *h_histo = new unsigned int[numBins];
   const int maxThreadsPerBlock = 1024;
   checkCudaErrors(cudaMalloc((void **) &d_histo, numBins * sizeof(int)));
   checkCudaErrors(cudaMemset(d_histo, 0, numBins * sizeof(int)));
@@ -188,12 +247,27 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
                                                                logLumRange,
                                                                numBins);
 
+
+
+
+  // checkCudaErrors(cudaMemcpy(h_histo, d_histo, numBins * sizeof(int), cudaMemcpyDeviceToHost));
+  //
+  // for(int i = 0; i < numBins; i++)
+  // {
+  //   printf("%i,", h_histo[i]);
+  //   if(i + 1== numBins )
+  //   {
+  //     printf("\n");
+  //   }
+  // }
+
   /*
     4) Perform an exclusive scan (prefix sum) on the histogram to get
        the cumulative distribution of luminance values (this should go in the
        incoming d_cdf pointer which already has been allocated for you)
   */
+  int blocks = 1;
+  int threads = numBins;
 
-  
-
+  prescan<<<blocks, threads,threads * 2 * sizeof(unsigned int)>>>(d_cdf, d_histo, numBins);
 }
