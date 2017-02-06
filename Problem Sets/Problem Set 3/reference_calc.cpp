@@ -2,7 +2,7 @@
 #include <cassert>
 
 void referenceCalculation(const float* const h_logLuminance, unsigned int* const h_cdf,
-                          const size_t numRows, const size_t numCols, const size_t numBins, 
+                          const size_t numRows, const size_t numCols, const size_t numBins,
 						  float &logLumMin, float &logLumMax)
 {
   logLumMin = h_logLuminance[0];
@@ -14,6 +14,9 @@ void referenceCalculation(const float* const h_logLuminance, unsigned int* const
     logLumMin = std::min(h_logLuminance[i], logLumMin);
     logLumMax = std::max(h_logLuminance[i], logLumMax);
   }
+
+  printf("reference maximum %f \n", logLumMax);
+  printf("reference minimum %f \n", logLumMin);
 
   //Step 2
   float logLumRange = logLumMax - logLumMin;
@@ -29,6 +32,16 @@ void referenceCalculation(const float* const h_logLuminance, unsigned int* const
     unsigned int bin = std::min(static_cast<unsigned int>(numBins - 1),
                            static_cast<unsigned int>((h_logLuminance[i] - logLumMin) / logLumRange * numBins));
     histo[bin]++;
+  }
+
+  printf("reference histo: \n");
+  for(int i = 0; i < numBins; i++)
+  {
+    printf("%i,", histo[i]);
+    if(i + 1== numBins )
+    {
+      printf("\n");
+    }
   }
 
   //Step 4
